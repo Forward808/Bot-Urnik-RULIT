@@ -12,7 +12,7 @@ import calendar
 from telebot.apihelper import ApiException
 
 # config.py
-BOT_TOKEN = '7391321513:AAExao4Ul3b4sktW29AeODkIz1XbwjtmWJw'
+BOT_TOKEN = '7345016752:AAGVrKutq4R5YMI8FYteU0j9y9m7sCDxTMY'
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,8 +36,8 @@ conn.commit()
 
 user_data = {}
 
-DISCORD_LINK = "https://discord.gg/your-discord-invite-link"
-PAYMENT_DETAILS = "1234 5678 9012 3456"
+DISCORD_LINK = "https://discord.gg/PeyHRJMgXT"
+PAYMENT_DETAILS = "4276 3802 3952 6044"
 Prepod_LINK = "https://t.me/mosmikhailova"
 
 def create_connection():
