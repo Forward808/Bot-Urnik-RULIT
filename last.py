@@ -10,6 +10,7 @@ import logging
 import atexit
 import calendar
 from telebot.apihelper import ApiException
+import hashlib
 
 
 from PIL import Image, ImageDraw, ImageFont
@@ -28,11 +29,51 @@ logger = logging.getLogger(__name__)
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 bot.timeout = 30
 
+
+
+
+
+"""
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def test_hashing():
+    test_password = "Bastion1@"
+    hashed = hash_password(test_password)
+    print(f"Тестовый пароль: {test_password}")
+    print(f"Хеш тестового пароля: {hashed}")
+    print(f"Длина хеша: {len(hashed)} символов")
+    print(f"Используемый алгоритм: SHA-256")
+
+# Вызовем тестовую функцию
+test_hashing()
+
+# Теперь давайте проверим ваш реальный пароль
+your_password = "ВашПарольЗдесь"  # Замените на ваш реальный пароль
+your_hash = hash_password(your_password)
+print(f"\nВаш пароль: {your_password}")
+print(f"Хеш вашего пароля: {your_hash}")
+
+
+
+"""
+
+
+
+
+
+
+
 ADMIN_IDS = [1413637959, 920711549]
+
+ADMIN_PASSWORD_HASH = "4b921f81eac536d771630abc9ec353302256e1a17e4a9bde4d1ab8c40873c52c"
 
 conn = sqlite3.connect('school_bot.db', check_same_thread=False)
 cursor = conn.cursor()
 
+MAX_PASSWORD_ATTEMPTS = 5
+password_attempts = {}
 
 # Создание таблиц
 cursor.execute('''CREATE TABLE IF NOT EXISTS users
@@ -433,25 +474,92 @@ def save_user_data(user_id):
 
 
 
+
+
+
+
+
+
+
+
+# Функция для хеширования пароля
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+# Функция для проверки пароля
+def check_password(user_id, password):
+    hashed_password = hash_password(password)
+    # Сравниваем с предварительно вычисленным хешем
+    return hashed_password == ADMIN_PASSWORD_HASH
+
 @bot.message_handler(func=lambda message: message.text == "Скачать базу данных" and message.from_user.id in ADMIN_IDS)
 def send_database(message):
-    try:
-        with open('school_bot.db', 'rb') as db_file:
-            bot.send_document(message.chat.id, db_file, caption="База данных школьного бота")
-    except Exception as e:
-        bot.reply_to(message, f"Произошла ошибка при отправке базы данных: {str(e)}")
+    user_id = message.from_user.id
+    if user_id not in password_attempts:
+        password_attempts[user_id] = 0
+    
+    if password_attempts[user_id] >= MAX_PASSWORD_ATTEMPTS:
+        bot.reply_to(message, "Превышено максимальное количество попыток. Доступ заблокирован.")
+        return
 
-@bot.message_handler(func=lambda message: message.text == "Вернуть базу данных" and message.from_user.id in ADMIN_IDS)
+    bot.reply_to(message, "Введите пароль для скачивания базы данных:")
+    bot.register_next_step_handler(message, check_password_and_send_database)
+
+def check_password_and_send_database(message):
+    user_id = message.from_user.id
+    password = message.text
+
+    if check_password(user_id, password):
+        password_attempts[user_id] = 0  # Сбрасываем счетчик попыток
+        try:
+            with open('school_bot.db', 'rb') as db_file:
+                bot.send_document(message.chat.id, db_file, caption="База данных школьного бота")
+        except Exception as e:
+            bot.reply_to(message, f"Произошла ошибка при отправке базы данных: {str(e)}")
+    else:
+        password_attempts[user_id] += 1
+        remaining_attempts = MAX_PASSWORD_ATTEMPTS - password_attempts[user_id]
+        if remaining_attempts > 0:
+            bot.reply_to(message, f"Неверный пароль. Осталось попыток: {remaining_attempts}")
+            bot.register_next_step_handler(message, check_password_and_send_database)
+        else:
+            bot.reply_to(message, "Превышено максимальное количество попыток. Доступ заблокирован.")
+
+
+
+
+
+@bot.message_handler(func=lambda message: message.text == "Скачать базу данных" and message.from_user.id in ADMIN_IDS)
 def download_database(message):
+    user_id = message.from_user.id
+    if user_id not in password_attempts:
+        password_attempts[user_id] = 0
+    
+    if password_attempts[user_id] >= MAX_PASSWORD_ATTEMPTS:
+        bot.reply_to(message, "Превышено максимальное количество попыток. Доступ заблокирован.")
+        return
+
     bot.reply_to(message, "Введите пароль:")
     bot.register_next_step_handler(message, check_password_and_download)
 
+
+@bot.message_handler(func=lambda message: message.text == "Вернуть базу данных" and message.from_user.id in ADMIN_IDS)
 def check_password_and_download(message):
-    if message.text == "Bastion1@":
+    user_id = message.from_user.id
+    password = message.text
+
+    if check_password(user_id, password):
+        password_attempts[user_id] = 0  # Сбрасываем счетчик попыток
         bot.reply_to(message, "Я ожидаю, отправьте файл в формате .db")
         bot.register_next_step_handler(message, save_new_database)
     else:
-        bot.reply_to(message, "Неверный пароль. Доступ запрещен.")
+        password_attempts[user_id] += 1
+        remaining_attempts = MAX_PASSWORD_ATTEMPTS - password_attempts[user_id]
+        if remaining_attempts > 0:
+            bot.reply_to(message, f"Неверный пароль. Осталось попыток: {remaining_attempts}")
+            bot.register_next_step_handler(message, check_password_and_download)
+        else:
+            bot.reply_to(message, "Превышено максимальное количество попыток. Доступ заблокирован.")
 
 def save_new_database(message):
     if message.document and message.document.file_name.endswith('.db'):
@@ -465,8 +573,6 @@ def save_new_database(message):
             bot.reply_to(message, f"Произошла ошибка при сохранении базы данных: {str(e)}")
     else:
         bot.reply_to(message, "Пожалуйста, отправьте файл базы данных в формате .db")
-
-
 
 #**********************************************************************************************************
     #
