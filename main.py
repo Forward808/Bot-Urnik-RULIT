@@ -11,7 +11,6 @@ import atexit
 import calendar
 from telebot.apihelper import ApiException
 import hashlib
-import locale
 from PIL import Image, ImageDraw, ImageFont
 import imageio
 import os
@@ -19,7 +18,7 @@ from datetime import datetime, timedelta
 import math
 
 # config.py
-BOT_TOKEN = '7323942446:AAEMq1ckcO2jK70DTOMUpPbMVtjqwyta0_g'
+BOT_TOKEN = '7345016752:AAGVrKutq4R5YMI8FYteU0j9y9m7sCDxTMY'
 PAYMENT_TOKEN = '284685063:TEST:ZWY0M2ZhYjZmZjM0'  # Замените на ваш тестовый токен Stripe от Telegram
 
 logging.basicConfig(level=logging.INFO)
@@ -30,54 +29,9 @@ bot.timeout = 30
 
 
 
-
-
-# Установка русской локали
-try:
-    locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
-except locale.Error:
-    try:
-        locale.setlocale(locale.LC_ALL, 'Russian_Russia.1251')
-    except locale.Error:
-        print("Не удалось установить русскую локаль. Используем стандартную.")
-
-
-
-"""
-
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def test_hashing():
-    test_password = "Bastion1@"
-    hashed = hash_password(test_password)
-    print(f"Тестовый пароль: {test_password}")
-    print(f"Хеш тестового пароля: {hashed}")
-    print(f"Длина хеша: {len(hashed)} символов")
-    print(f"Используемый алгоритм: SHA-256")
-
-# Вызовем тестовую функцию
-test_hashing()
-
-# Теперь давайте проверим ваш реальный пароль
-your_password = "ВашПарольЗдесь"  # Замените на ваш реальный пароль
-your_hash = hash_password(your_password)
-print(f"\nВаш пароль: {your_password}")
-print(f"Хеш вашего пароля: {your_hash}")
-
-
-
-"""
-
-
-
-
-
-
-
 ADMIN_IDS = [1413637959, 920711549]
 
-ADMIN_PASSWORD_HASH = "4b921f81eac536d771630abc9ec353302256e1a17e4a9bde4d1ab8c40873c52c"
+ADMIN_PASSWORD_HASH = "a64f8cdc34e607ee798b022bf9bab1a3895a6bae64277d850731f0b5fff1a724"
 
 conn = sqlite3.connect('school_bot.db', check_same_thread=False)
 cursor = conn.cursor()
@@ -96,8 +50,8 @@ conn.commit()
 
 user_data = {}
 
-DISCORD_LINK = "https://discord.gg/your-discord-invite-link"
-PAYMENT_DETAILS = "1234 5678 9012 3456"
+DISCORD_LINK = "https://discord.gg/PeyHRJMgXT"
+PAYMENT_DETAILS = "4276 3802 3952 6044"
 Prepod_LINK = "https://t.me/mosmikhailova"
 
 
@@ -1669,27 +1623,6 @@ def check_and_send_notifications():
         
         time.sleep(60)  # Проверяем каждую минуту
     local_conn.close()
-
-
-
-
-    #
-    #
-    #
-    #
-
-
-
-
-
-
-
-#**********************************************************************************************************
-
-
-
-
-
 
 
 
