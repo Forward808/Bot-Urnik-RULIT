@@ -178,82 +178,143 @@ def generate_calendar(year, month):
 @bot.message_handler(func=lambda message: message.text == "Оплатить занятие")
 def pay_for_lesson(message):
     user_id = message.from_user.id
-    cursor.execute("SELECT id, subject, date, time FROM bookings WHERE user_id = ? AND paid = 0", (user_id,))
-    unpaid_bookings = cursor.fetchall()
+    cursor.execute("""
+        SELECT id, subject, date, time, paid
+        FROM bookings 
+        WHERE user_id = ?
+        ORDER BY date DESC, time DESC
+    """, (user_id,))
+    all_bookings = cursor.fetchall()
     
-    if not unpaid_bookings:
-        bot.send_message(message.chat.id, "У вас нет неоплаченных занятий.")
+    if not all_bookings:
+        bot.send_message(message.chat.id, "У вас нет занятий для оплаты.")
         return
 
     markup = InlineKeyboardMarkup()
-    for booking in unpaid_bookings:
-        booking_id, subject, date, time = booking
-        button_text = f"{subject} - {date} {time}"
+    for booking in all_bookings:
+        booking_id, subject, date, time, paid = booking
+        status = "Оплачено" if paid else "Не оплачено"
+        button_text = f"{subject} - {date} {time} - {status}"
         callback_data = f"pay_{booking_id}"
         markup.add(InlineKeyboardButton(text=button_text, callback_data=callback_data))
 
     bot.send_message(message.chat.id, "Выберите занятие для оплаты:", reply_markup=markup)
-
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pay_"))
 def handle_payment_selection(call):
     booking_id = int(call.data.split("_")[1])
     user_id = call.from_user.id
     
-    logger.info(f"Попытка оплаты: booking_id={booking_id}, user_id={user_id}")
-
-    # Проверка существования бронирования
-    cursor.execute("SELECT * FROM bookings WHERE id = ?", (booking_id,))
-    booking_check = cursor.fetchone()
-    if booking_check:
-        logger.info(f"Бронирование существует в базе: {booking_check}")
-    else:
-        logger.error(f"Бронирование с id={booking_id} не найдено в базе данных")
-
-    # Проверка неоплаченных бронирований пользователя
-    cursor.execute("SELECT * FROM bookings WHERE user_id = ? AND paid = 0", (user_id,))
-    user_bookings = cursor.fetchall()
-    logger.info(f"Неоплаченные бронирования пользователя: {user_bookings}")
-
-    # Изменяем запрос, убирая JOIN с таблицей users
-    cursor.execute("SELECT subject, date, time FROM bookings WHERE id = ? AND user_id = ?", (booking_id, user_id))
+    cursor.execute("SELECT subject, date, time, paid FROM bookings WHERE id = ?", (booking_id,))
     booking = cursor.fetchone()
+    
+    if booking:
+        subject, date, time, paid = booking
+        if paid:
+            bot.answer_callback_query(call.id, "Это занятие уже оплачено.")
+            return
+        
+        cursor.execute("SELECT grade FROM users WHERE id = ?", (user_id,))
+        user_grade = cursor.fetchone()[0]
+        price = get_lesson_price(user_grade)
+        
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Да", callback_data=f"confirm_payment_{booking_id}"))
+        markup.add(InlineKeyboardButton("Нет", callback_data=f"pay_{booking_id}"))
+        markup.add(InlineKeyboardButton("Отмена", callback_data="cancel_payment"))
+        
+        bot.edit_message_text(
+            f"Вы подтверждаете, что перевели {price} руб. за занятие {subject} {date} в {time} на карту {PAYMENT_DETAILS}?",
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=markup
+        )
+    else:
+        bot.answer_callback_query(call.id, "Ошибка: занятие не найдено.")
 
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("confirm_payment_"))
+def confirm_payment(call):
+    booking_id = int(call.data.split("_")[2])
+    user_id = call.from_user.id
+    
+    cursor.execute("SELECT name FROM users WHERE id = ?", (user_id,))
+    user_name = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT subject, date, time FROM bookings WHERE id = ?", (booking_id,))
+    booking = cursor.fetchone()
+    
     if booking:
         subject, date, time = booking
-        logger.info(f"Бронирование найдено: subject={subject}, date={date}, time={time}")
         
-        # Получаем grade пользователя отдельным запросом
-        cursor.execute("SELECT grade FROM users WHERE id = ?", (user_id,))
-        user_grade = cursor.fetchone()
+        # Отправка сообщения админу
+        admin_markup = InlineKeyboardMarkup()
+        admin_markup.add(InlineKeyboardButton("Подтверждаю", callback_data=f"admin_confirm_{booking_id}"))
+        admin_markup.add(InlineKeyboardButton("Не подтверждаю", callback_data=f"admin_reject_{booking_id}"))
+        admin_markup.add(InlineKeyboardButton("Ответить позже", callback_data=f"admin_later_{booking_id}"))
         
-        if user_grade:
-            grade = user_grade[0]
-            logger.info(f"Grade пользователя: {grade}")
-            price = get_lesson_price(grade)
-
-            prices = [LabeledPrice(label=f'{subject} - {date} {time}', amount=price * 100)]  # в копейках
-            try:
-                bot.send_invoice(
-                    call.message.chat.id,
-                    title=f"Оплата занятия: {subject}",
-                    description=f"Дата: {date}, Время: {time}",
-                    provider_token=PAYMENT_TOKEN,
-                    currency="rub",
-                    prices=prices,
-                    start_parameter="create_invoice_lesson",
-                    invoice_payload=f"booking_id:{booking_id}"
-                )
-                logger.info(f"Инвойс отправлен для booking_id: {booking_id}")
-            except ApiException as e:
-                logger.error(f"Ошибка при отправке инвойса: {e}")
-                bot.answer_callback_query(call.id, "Произошла ошибка при создании платежа. Пожалуйста, попробуйте позже.")
-        else:
-            logger.error(f"Grade пользователя не найден: user_id={user_id}")
-            bot.answer_callback_query(call.id, "Ошибка: не удалось получить информацию о классе ученика.")
+        for admin_id in ADMIN_IDS:
+            bot.send_message(
+                admin_id,
+                f"Ученик {user_name} подтверждает оплату за занятие:\n"
+                f"{subject} {date} в {time}\n"
+                f"Подтвердите получение оплаты:",
+                reply_markup=admin_markup
+            )
+        
+        bot.edit_message_text(
+            "Информация передана преподавателю. Ожидайте подтверждения.",
+            call.message.chat.id,
+            call.message.message_id
+        )
     else:
-        logger.error(f"Бронирование не найдено: booking_id={booking_id}, user_id={user_id}")
-        bot.answer_callback_query(call.id, "Бронирование не найдено или уже оплачено.")
+        bot.answer_callback_query(call.id, "Ошибка: занятие не найдено.")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_"))
+def admin_payment_action(call):
+    action, booking_id = call.data.split("_")[1:]
+    booking_id = int(booking_id)
+    
+    cursor.execute("SELECT user_id, subject, date, time FROM bookings WHERE id = ?", (booking_id,))
+    booking = cursor.fetchone()
+    
+    if booking:
+        user_id, subject, date, time = booking
+        
+        if action == "confirm":
+            cursor.execute("UPDATE bookings SET paid = 1 WHERE id = ?", (booking_id,))
+            conn.commit()
+            bot.send_message(user_id, f"Оплата за занятие {subject} {date} в {time} подтверждена преподавателем.")
+            bot.answer_callback_query(call.id, "Оплата подтверждена.")
+        
+        elif action == "reject":
+            bot.send_message(user_id, f"Преподаватель не получил оплату за занятие {subject} {date} в {time}. Пожалуйста, проверьте еще раз.")
+            bot.answer_callback_query(call.id, "Оплата отклонена.")
+        
+        elif action == "later":
+            # Напоминание на следующий рабочий день
+            next_work_day = datetime.now() + timedelta(days=1)
+            while next_work_day.weekday() >= 5:  # 5 - суббота, 6 - воскресенье
+                next_work_day += timedelta(days=1)
+            
+            bot.answer_callback_query(call.id, f"Напоминание отложено до {next_work_day.strftime('%d.%m.%Y')}.")
+            
+            # Здесь можно добавить логику для создания отложенного напоминания
+            # Например, сохранить информацию в базе данных и создать задачу для отправки напоминания в нужное время
+    
+    else:
+        bot.answer_callback_query(call.id, "Ошибка: занятие не найдено.")
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_payment")
+def cancel_payment(call):
+    bot.edit_message_text(
+        "Оплата отменена. Вы вернулись в главное меню.",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=main_menu()
+    )
+
+
 
 
 @bot.pre_checkout_query_handler(func=lambda query: True)
@@ -598,14 +659,16 @@ def payment_period_menu():
     markup.add(InlineKeyboardButton("Сегодня", callback_data="payment_check_today"))
     markup.add(InlineKeyboardButton("Текущая неделя", callback_data="payment_check_week"))
     markup.add(InlineKeyboardButton("Текущий месяц", callback_data="payment_check_month"))
-    markup.add(InlineKeyboardButton("Прошлый месяц", callback_data="payment_check_last_month"))
+    markup.add(InlineKeyboardButton("Прошлый месяц", callback_data="payment_check_lastmonth"))
     markup.add(InlineKeyboardButton("Все время", callback_data="payment_check_all"))
     return markup
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("payment_check_"))
 def handle_payment_check(call):
-    period = call.data.split("_")[2]
+    period = call.data.split("_")[-1]  # Изменено здесь
     today = datetime.now().date()
+    
+    print(f"Выбранный период: {period}")  # Отладочная информация
     
     if period == "today":
         start_date = today
@@ -617,18 +680,34 @@ def handle_payment_check(call):
         start_date = today.replace(day=1)
         next_month = today.replace(day=28) + timedelta(days=4)
         end_date = next_month - timedelta(days=next_month.day)
-    elif period == "last_month":
-        end_date = today.replace(day=1) - timedelta(days=1)
-        start_date = end_date.replace(day=1)
-    else:  # all time
-        start_date = datetime.min.date()
-        end_date = datetime.max.date()
+    elif period == "lastmonth":
+        # Находим первый день текущего месяца
+        first_day_of_current_month = today.replace(day=1)
+        # Находим первый день предыдущего месяца
+        first_day_of_last_month = (first_day_of_current_month - timedelta(days=1)).replace(day=1)
+        # Находим последний день предыдущего месяца
+        _, last_day = calendar.monthrange(first_day_of_last_month.year, first_day_of_last_month.month)
+        start_date = first_day_of_last_month
+        end_date = first_day_of_last_month.replace(day=last_day)
+    elif period == "all":
+        start_date = datetime(2000, 1, 1).date()  # Используем более реалистичную начальную дату
+        end_date = today
+    else:
+        bot.answer_callback_query(call.id, "Неверный период")
+        print(f"Неверный период: {period}")  # Отладочная информация
+        return
+
+    print(f"Выбранный период: с {start_date} по {end_date}")  # Отладочная информация
 
     generate_payment_report(call.message.chat.id, start_date, end_date)
+    bot.answer_callback_query(call.id, f"Отчет сгенерирован за период: {start_date} - {end_date}")
+
+
+
 
 def generate_payment_report(chat_id, start_date, end_date):
     cursor.execute("""
-        SELECT users.name, bookings.subject, bookings.date, bookings.time, bookings.paid, users.grade
+        SELECT bookings.id, users.name, bookings.subject, bookings.date, bookings.time, bookings.paid, users.grade
         FROM bookings
         JOIN users ON bookings.user_id = users.id
         WHERE bookings.date BETWEEN ? AND ?
@@ -646,10 +725,10 @@ def generate_payment_report(chat_id, start_date, end_date):
     total_unpaid = 0
 
     for booking in bookings:
-        name, subject, date, time, paid, grade = booking
+        booking_id, name, subject, date, time, paid, grade = booking
         price = get_lesson_price(grade)
         status = "Оплачено" if paid else "Не оплачено"
-        response += f"{name} - {subject} - {date} {time} - {status} - {price} руб.\n"
+        response += f"ID: {booking_id} - {name} - {subject} - {date} {time} - {status} - {price} руб.\n"
         if paid:
             total_paid += price
         else:
@@ -685,25 +764,55 @@ def process_payment_marking(message):
 
 @bot.message_handler(func=lambda message: message.text == "Просмотр записей" and message.from_user.id in ADMIN_IDS)
 def admin_view_bookings(message):
-    today = datetime.now().date()
+    now = datetime.now()
+    today = now.date()
+
+    # Получаем все активные (будущие) записи
     cursor.execute("""
         SELECT bookings.id, users.name, bookings.subject, bookings.date, bookings.time 
         FROM bookings 
         JOIN users ON bookings.user_id = users.id
-        WHERE bookings.date >= ? 
+        WHERE bookings.date >= ? OR (bookings.date = ? AND bookings.time > ?)
         ORDER BY bookings.date, bookings.time
-    """, (today.strftime('%Y-%m-%d'),))
-    bookings = cursor.fetchall()
-    
-    if bookings:
-        response = "Все активные записи:\n\n"
-        for booking in bookings:
+    """, (today.strftime('%Y-%m-%d'), today.strftime('%Y-%m-%d'), now.strftime('%H:%M')))
+    active_bookings = cursor.fetchall()
+
+    # Получаем последние 10 прошедших записей
+    cursor.execute("""
+        SELECT bookings.id, users.name, bookings.subject, bookings.date, bookings.time 
+        FROM bookings 
+        JOIN users ON bookings.user_id = users.id
+        WHERE bookings.date < ? OR (bookings.date = ? AND bookings.time <= ?)
+        ORDER BY bookings.date DESC, bookings.time DESC
+        LIMIT 10
+    """, (today.strftime('%Y-%m-%d'), today.strftime('%Y-%m-%d'), now.strftime('%H:%M')))
+    past_bookings = cursor.fetchall()
+
+    response = ""
+
+    if active_bookings:
+        response += "Активные записи:\n\n"
+        for booking in active_bookings:
             booking_id, name, subject, date, time = booking
             formatted_date = format_date(date)
             response += f"ID: {booking_id} - {name} - {subject} - {formatted_date} в {time}\n"
-        bot.send_message(message.chat.id, response)
     else:
-        bot.send_message(message.chat.id, "Нет активных записей.")
+        response += "Нет активных записей.\n"
+
+    if past_bookings:
+        response += "\nПоследние 10 прошедших записей:\n\n"
+        for booking in past_bookings:
+            booking_id, name, subject, date, time = booking
+            formatted_date = format_date(date)
+            response += f"ID: {booking_id} - {name} - {subject} - {formatted_date} в {time}\n"
+    else:
+        response += "\nНет прошедших записей."
+
+    # Разделяем сообщение на части, если оно слишком длинное
+    max_message_length = 4096
+    for i in range(0, len(response), max_message_length):
+        bot.send_message(message.chat.id, response[i:i+max_message_length])
+
 
 @bot.message_handler(func=lambda message: message.text == "Изменить запись" and message.from_user.id in ADMIN_IDS)
 def admin_modify_booking(message):
@@ -1163,33 +1272,45 @@ def show_bookings(message):
     user_id = message.from_user.id
     now = datetime.now()
     
-    # Удаление прошедших записей
-    cursor.execute("""
-        DELETE FROM bookings
-        WHERE user_id = ? AND (date < ? OR (date = ? AND time <= ?))
-    """, (user_id, now.strftime('%Y-%m-%d'), now.strftime('%Y-%m-%d'), now.strftime('%H:%M')))
-    conn.commit()
-    
-    # Получение актуальных записей
+    # Получение всех записей пользователя
     cursor.execute("""
         SELECT id, subject, date, time, paid
         FROM bookings 
-        WHERE user_id = ? AND (date > ? OR (date = ? AND time > ?))
+        WHERE user_id = ?
         ORDER BY date, time
-    """, (user_id, now.strftime('%Y-%m-%d'), now.strftime('%Y-%m-%d'), now.strftime('%H:%M')))
+    """, (user_id,))
     
     bookings = cursor.fetchall()
     
     if bookings:
-        response = "Ваши активные записи:\n\n"
+        future_bookings = []
+        past_bookings = []
         for booking in bookings:
+            booking_id, subject, date, time, paid = booking
+            booking_datetime = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+            if booking_datetime > now:
+                future_bookings.append(booking)
+            else:
+                past_bookings.append(booking)
+        
+        response = "Ваши будущие записи:\n\n"
+        for booking in future_bookings:
             booking_id, subject, date, time, paid = booking
             formatted_date = format_date(date)
             payment_status = "Оплачено" if paid else "Не оплачено"
             response += f"ID: {booking_id} - {subject} - {formatted_date} в {time} - {payment_status}\n"
+        
+        if past_bookings:
+            response += "\nВаши прошедшие записи:\n\n"
+            for booking in past_bookings[-5:]:  # Показываем только последние 5 прошедших записей
+                booking_id, subject, date, time, paid = booking
+                formatted_date = format_date(date)
+                payment_status = "Оплачено" if paid else "Не оплачено"
+                response += f"ID: {booking_id} - {subject} - {formatted_date} в {time} - {payment_status}\n"
+        
         bot.send_message(message.chat.id, response)
     else:
-        bot.send_message(message.chat.id, "У вас нет активных записей.")
+        bot.send_message(message.chat.id, "У вас нет записей.")
 
 
 @bot.message_handler(func=lambda message: message.text == "Отменить запись")
