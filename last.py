@@ -11,8 +11,7 @@ import atexit
 import calendar
 from telebot.apihelper import ApiException
 import hashlib
-
-
+import locale
 from PIL import Image, ImageDraw, ImageFont
 import imageio
 import os
@@ -30,6 +29,17 @@ bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 bot.timeout = 30
 
 
+
+
+
+# Установка русской локали
+try:
+    locale.setlocale(locale.LC_ALL, 'ru_RU.UTF-8')
+except locale.Error:
+    try:
+        locale.setlocale(locale.LC_ALL, 'Russian_Russia.1251')
+    except locale.Error:
+        print("Не удалось установить русскую локаль. Используем стандартную.")
 
 
 
